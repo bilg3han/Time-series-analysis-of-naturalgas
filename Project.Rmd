@@ -1,0 +1,478 @@
+---
+title: "STAT497 PROJECT"
+author: "Bilgehan Aydoğdu 2428886"
+date: "`r Sys.Date()`"
+output:
+  rmdformats::readthedown:
+    highlight: kate
+---
+**Bilgehan Aydoğdu **
+**2428886 **
+```{r setup, include=FALSE}
+## Global options
+knitr::opts_chunk$set(cache = TRUE)
+```
+
+
+
+
+- Firstly, the necessary libraries were uploaded.
+```{r}
+library(TSA)
+library(ggplot2)
+library(forecast)
+library(fpp2)
+library(tseries)
+library(gridExtra)
+library(pdR)
+library(tidyverse)
+library(tibbletime)
+library(timetk)
+library(magrittr)
+library(tsibble)
+library(dplyr)
+```
+
+
+# Data descripition
+```{r}
+data <- read.csv("NATURALGASD11 (1).csv")
+head(data)
+tail(data)
+data1 <- ts(na.omit(data[,2]), frequency = 12, start = c(2000, 1))# Create time series object
+data1
+```
+**Time series plot**
+```{r}
+# Time series plot
+autoplot(data1,main = "Time Series Plot of Natural Gas Consumption")# there is a slight increase trend
+```
+ 
+ By looking at the plot, we may say that there is a slight increasing trend.
+
+
+**Splitting data as train and test** 
+```{r}
+train <- data[1:273,]
+
+test <- data[274:285,]
+
+ts_train<-ts(train[,2],frequency= 12,start = c(2000,1))
+ts_test <- ts(test[,2],frequency= 12,start = c(2022,10))
+head(train)
+```
+
+
+# Anomaly Detection
+-We convert "train" to a tibble format 
+```{r}
+train <- as_tibble(train)
+class(train)
+```
+```{r}
+train$DATE <- as.Date(train$DATE,format="%Y-%m-%d")
+```
+
+```{r}
+library(tidyverse)  # Core data manipulation and visualization libraries
+library(tidyquant)  # Used for business-ready ggplot themes
+library(anomalize)  # Identify and clean time series anomalies
+library(timetk)     # Time Series Machine Learning Features
+library(knitr)      # For kable() function: This is a very simple table generator. 
+
+train %>% 
+  time_decompose(NATURALGASD11, method = "stl", frequency = "auto", trend = "auto") %>%
+  anomalize(remainder, method = "gesd", alpha = 0.05, max_anoms = 0.2) %>%
+  plot_anomaly_decomposition()
+```
+
+
+```{r}
+train%>% 
+  time_decompose(NATURALGASD11) %>%
+  anomalize(remainder,alpha=0.05) %>%
+  time_recompose() %>%
+  plot_anomalies(time_recomposed = TRUE, ncol = 3, alpha_dots = 0.5)
+```
+By looking at the plot, we may say that there is no anomalies in this data.
+
+
+
+#	Box-Cox transformation 
+```{r}
+library(forecast)
+lambda <- BoxCox.lambda(train)
+lambda
+```
+Since lambda value is 1, no need transformation.
+
+
+# ACF and PACF 
+```{r}
+library(gridExtra)
+p1<-ggAcf(ts_train,main = "ACF Plot of The Series")
+p2<-ggPacf(ts_train,main = "PACF Plot of The Series")
+grid.arrange(p1,p2,nrow=1)
+```
+
+
+# KPSS, ADF, HEGY and Canova-Hansen Tests 
+**KPSS **
+```{r}
+library(tseries)
+kpss.test(ts_train,null = "Level")
+```
+Since p value is less than alpha, we reject H0. That means we don’t have enough evidence to claim that the process is stationary.
+
+Since we concluded that the series is not stationary, now we apply KPSS test a second time to determine which kind of trend exists in the series;
+
+```{r}
+kpss.test(ts_train,null=c("Trend"))
+```
+Since p value is smaller than alpha, we reject H0, That means We don't have enough evidence to claim that the process has deterministic trend.
+
+**ADF **
+```{r}
+library(fUnitRoots)
+adfTest(ts_train, lags=1, type="c") 
+```
+Since p value is greater than α=0.05 , we fail to reject H0.It means that we don’t have enough evidence to claim that we have a stationary system, like KPSS test.
+
+```{r}
+adfTest(train$NATURALGASD11, lags=1, type="ct") 
+```
+Since p value is smaller than α=0.05 , we  reject H0. It mean non-stationary series have determenistic trend.
+
+However, when we look time series plot of the series it is obvious that the series has a stochastic trend. So, we may ignore this part of the result of the adf-test.
+
+**HEGY **
+```{r}
+ts_train <- BoxCox(ts_train,lambda)
+library(pdR)
+out<-HEGY.test(wts=ts_train, itsd=c(1,0,0), regvar=0, selectlags=list(mode="signf", Pmax=NULL))
+out$stats
+```
+In this output, we will use p value of tpi_1 for regular unit root and use the p value of Fpi_11:12 for testing seasonal unit root. The output shows that the system has regular unit root because p values of  tpi_1 is greater than α value. (p>0.05) But, Fpi_11:12 is smaller than α value. (p>0.05)
+
+**Canova-Hansen **
+```{r}
+library(uroot)
+ch.test(ts_train,type = "dummy",sid=c(1:12)) #since we have monthly data, we use sid=c(1:12)
+```
+Since p value (0.274) is greater α , we fail to reject H0. The series have purely deterministic seaonality (no seasonal unit root).
+
+#   Differencing
+**Since there is a trend, we should remove it either by detrending or differencing.**
+
+Number of differencing should be taken will be as follows;
+```{r}
+ndiffs(ts_train)
+```
+We need to take one regular difference.
+
+```{r}
+diff.ts <- diff(ts_train) # regular diff
+
+```
+
+
+
+```{r}
+library(fUnitRoots)
+adfTest(diff.ts, lags=1, type="nc") 
+```
+Since p value is less than α, we reject H0. We have enough evidence to conclude that differenced series are stationary.
+
+```{r}
+library(pdR)
+out1<-HEGY.test(wts=diff.ts, itsd=c(1,0,0), regvar=0, selectlags=list(mode="signf", Pmax=NULL))
+out1$stats
+
+```
+The output shows that the differenced series does not have regular or seasonal unit root since p values of  tpi_1 and Fpi_11:12 is less than α value.
+
+The trend is removed, We need to check time series plot, ACF and PACF.
+
+-Time series plot;
+```{r}
+autoplot(diff.ts,main = " Time Series Plot of Differenced Data")
+```
+
+-ACF and PACF
+```{r}
+p11<-ggAcf(diff.ts, main = "ACF of Differenced Series")
+p22<-ggPacf(diff.ts, main = "PACF of Differenced Series")
+grid.arrange(p11,p22,nrow=1) 
+```
+We may suggest ARIMA(2,1,1) or ARIMA(2,1,2) models.
+
+
+```{r}
+library(TSA)
+eacf(diff.ts)
+
+```
+```{r}
+library(forecast)
+auto.arima(diff.ts)
+auto.arima(data1)
+auto.arima(ts_train)
+```
+
+# Model Identification and Paramater Estimation in Time Series Model
+
+We will select one of the models that we suggest at the previous part by using ACF,PACF and auto.arima. To select we should decide which one is better.
+```{r}
+fit1<-Arima(ts_train,order = c(2, 1, 2)) 
+fit1
+```
+```{r}
+fit2<-Arima(ts_train,order = c(2, 1, 1))
+fit2
+```
+```{r}
+fit3<-Arima(ts_train,order = c(1, 1, 2), seasonal = c(2,0,0))
+fit3
+```
+
+```{r}
+fit4<-Arima(ts_train,order = c(1, 1, 1), seasonal = c(2,0,0))
+fit4
+```
+fit1,fit2 and fit4 are significant. However, fit4 has the lowest AıC and BIC values. So, we continue with **fit4**. ARIMA(1,1,1)(2,0,0)[12]
+
+
+## Normality of Residuals
+
+Firstly, obtain the residuals,
+
+```{r}
+r=resid(fit4)/sd(residuals(fit4))
+head(r)
+```
+
+```{r}
+autoplot(r)+geom_line(y=0)+theme_minimal()+ggtitle("Plot of The Residuals")
+```
+Residuals are scattered around zero and it can be interpreted as zero mean.
+
+
+# Diagnostic Check
+```{r}
+r=resid(fit4)/sd(residuals(fit4))
+
+
+```
+
+
+
+
+
+
+```{r}
+ggplot(r,aes(x=r))+geom_histogram(bins=20)+geom_density()+ggtitle("Histogram of Residuals")+theme_minimal()
+```
+
+```{r}
+ggplot(r, aes(sample = r)) +stat_qq()+geom_qq_line()+ggtitle("QQ Plot of the Residuals")+theme_minimal()
+```
+
+
+# Jarque Bera Test
+```{r}
+jarque.bera.test(r)
+```
+
+# shapiro.test
+```{r}
+shapiro.test(r)
+```
+
+# Detection of Serial Correlation
+```{r}
+ggAcf(as.vector(r),main="ACF of the Standard Residuals",lag = 48)+theme_minimal()
+```
+almost all spikes are in the WN band, the residulas of the model are uncorrelated.
+
+```{r}
+Box.test(r,lag=15,type = c("Ljung-Box"))
+```
+Since p value is greater than 0.05, we have 95% confident that the residuals of the model are uncorrelated.
+
+```{r}
+Box.test(r,lag=15,type = c("Box-Pierce"))
+
+```
+Since p value is greater than alpha, we have 95% confident that the residuals of the model are uncorrelated, according to results of Box-Pierce Test.
+
+# Breusch-Godfrey Test
+```{r}
+m = lm(r ~ 1+zlag(r))
+library(lmtest)
+bgtest(m,order=14)
+```
+Since p value is greater than 0.05, we have 95% confident that the residuals of the model are uncorrelated, according to results of Breusch-Godfrey Test.
+
+
+# Heteroscedasticity of the residuals
+```{r}
+rr=r^2
+g1<-ggAcf(as.vector(rr),lag.max = 72)+theme_minimal()+ggtitle("ACF of Squared Residuals")
+g2<-ggPacf(as.vector(rr),lag.max = 72)+theme_minimal()+ggtitle("PACF of Squared Residuals")  # homoscedasticity check
+grid.arrange(g1,g2,ncol=2)
+```
+Plots shows that almost all spikes are in of the white noise bands that is an indication of homoscedasticity.
+
+# Engle’s ARCH Test
+```{r}
+library(FinTS)
+ArchTest(r)
+```
+Since p values is greater than 0.05 , we fail to reject H0. Therefore, we can conclude that there is no presence of ARCH effects.
+
+
+# Forecast
+# ARIMA forecast 
+```{r}
+arima_fr <- forecast(fit4,h = 12)
+arima_fr
+```
+```{r}
+autoplot(arima_fr,main = "ARIMA Forecast")
+```
+
+
+```{r}
+accuracy(arima_fr,ts_test)
+```
+
+
+
+#ETS
+```{r}
+ets_fit=ets(ts_train,model="ZZZ") 
+summary(ets_fit)
+```
+
+
+```{r}
+ets_forecast=forecast(ets_fit,h = 12)
+ets_forecast
+```
+
+```{r}
+autoplot(ets_forecast,holdout = T)+autolayer(fitted(ets_forecast),series="fitted")+theme_minimal()
+```
+```{r}
+accuracy(ets_forecast,ts_test)
+```
+
+
+# Tbats
+```{r}
+tbatsmodel<-tbats(ts_train)
+summary(tbatsmodel)
+```
+```{r}
+autoplot(ts_train,main="TS plot of Train with TBATS Fitted") +autolayer(fitted(tbatsmodel), series="Fitted") +theme_minimal()
+```
+
+```{r}
+shapiro.test(residuals(tbatsmodel))
+```
+
+
+```{r}
+tbats_forecast<-forecast(tbatsmodel,h=12)
+tbats_forecast
+```
+```{r}
+autoplot(tbats_forecast)+autolayer(ts_test,series="actual",color="red")+theme_minimal()
+```
+# Accuracy of TBATS
+```{r}
+accuracy(tbats_forecast,ts_test)
+```
+# NNETAR
+```{r}
+nnetar_fit <- nnetar(ts_train)
+autoplot(forecast(nnetar_fit, PI = TRUE,h=12))
+
+```
+
+
+```{r}
+shapiro.test(residuals(nnetar_fit))
+```
+
+
+```{r}
+nntear_fr <- forecast(nnetar_fit,PI = T ,h = 12)
+autoplot(nntear_fr) + autolayer(ts_test,series="actual",color="green")+theme_minimal()
+```
+
+
+
+```{r}
+accuracy(nntear_fr,ts_test)
+```
+# Prophet Model
+```{r}
+library(prophet)
+library(fpp)
+```
+
+
+```{r}
+ds<-c(seq(as.Date("2000/01/01"),as.Date("2022/09/01"),by="month"))
+train_df<-data.frame(ds,y=as.numeric(ts_train))
+
+m <- prophet(train_df)
+```
+
+
+```{r}
+future<-make_future_dataframe(m,periods = 12,freq='month') #periods 12, since it's a monthly series.
+tail(future,12)
+```
+
+```{r}
+dim(df);dim(future)
+```
+```{r}
+prophet_fr <- predict(m, future)
+tail(prophet_fr[c('ds', 'yhat', 'yhat_lower', 'yhat_upper')],12)
+```
+```{r}
+plot(m, prophet_fr)
+```
+
+```{r}
+prophet_plot_components(m, prophet_fr)
+```
+
+
+
+```{r}
+library(dygraphs)
+dyplot.prophet(m, prophet_fr)
+```
+
+```{r}
+accuracy(tail(prophet_fr$yhat,12),ts_test)
+```
+
+# Accuracy 
+
+```{r}
+accuracy(arima_fr,ts_test)
+accuracy(ets_forecast,ts_test)
+accuracy(tbats_forecast,ts_test)
+accuracy(nntear_fr,ts_test)
+accuracy(tail(prophet_fr$trend,12),ts_test)
+```
+```{r}
+library(greybox)
+library(smooth)
+es(train$NATURALGASD11, "ANN", h=12,interval=TRUE, holdout=TRUE, silent=FALSE)
+```
